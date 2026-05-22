@@ -46,6 +46,7 @@ colas = {}
 historial = {}
 cancion_actual = {}
 tiempo_inicio = {}
+mensajes_controles = {}
 
 class PanelMusica(discord.ui.View):
     def __init__(self, ctx):
@@ -107,7 +108,7 @@ class PanelMusica(discord.ui.View):
             await interaction.response.send_message("❌ La cola ya estaba vacía.", ephemeral=True)
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
+    def __init__(self, source, *, data, volume=1.0):
         super().__init__(source, volume)
         self.data = data
         self.title = data.get('title')
@@ -144,12 +145,10 @@ async def play(ctx, *, busqueda: str = None):
         return await ctx.send(f'Estoy ocupado en otro canal, no me puedo dividir caraalcornoque. No soy tu puto exnovio como para que me exigas estar en dos sitios a la vez. 😡')
 
     mensaje_espera = await ctx.send(f"🔍 `Buscando **{busqueda}**`")
-    
-    # Buscamos la info de la canción, pero NO la procesamos todavía
+
     data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(busqueda, download=False))
     cancion_info = data['entries'][0] if 'entries' in data else data
-    
-    # Guardamos solo el enlace y el título
+
     cancion = {'title': cancion_info['title'], 'url': cancion_info['webpage_url']}
 
     guild_id = ctx.guild.id
@@ -157,7 +156,6 @@ async def play(ctx, *, busqueda: str = None):
         colas[guild_id] = []
         historial[guild_id] = []
 
-    # Si ya hay algo sonando, va a la cola
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
         colas[guild_id].append(cancion)
         await mensaje_espera.delete()
@@ -165,44 +163,67 @@ async def play(ctx, *, busqueda: str = None):
     else:
         colas[guild_id].append(cancion)
         await mensaje_espera.delete()
-        await reproducir_siguiente_async(ctx) # Arranca el motor de reproducción
+        await reproducir_siguiente_async(ctx)
 
-# Motor asíncrono inteligente
 async def reproducir_siguiente_async(ctx):
     guild_id = ctx.guild.id
     vc = ctx.voice_client
 
-    # Guardamos la canción que acaba de terminar en el historial (máximo 10)
     if guild_id in cancion_actual and cancion_actual[guild_id]:
         historial[guild_id].append(cancion_actual[guild_id])
-        if len(historial[guild_id]) > 10:
+        if len(historial[guild_id]) > 20:
             historial[guild_id].pop(0)
         cancion_actual[guild_id] = None
 
-    # Si hay canciones en espera...
     if guild_id in colas and len(colas[guild_id]) > 0:
         siguiente = colas[guild_id].pop(0)
         cancion_actual[guild_id] = siguiente
-        tiempo_inicio[guild_id] = time.time() # 👈 Arranca el cronómetro de los 10 segundos
+        tiempo_inicio[guild_id] = time.time() 
+
+        # 🗑️ Borramos el panel de control previo si existe antes de mandar el nuevo
+        if guild_id in mensajes_controles and mensajes_controles[guild_id]:
+            try:
+                await mensajes_controles[guild_id].delete()
+            except Exception:
+                pass
+            mensajes_controles[guild_id] = None
 
         try:
             player = await YTDLSource.from_url(siguiente['url'], loop=bot.loop, stream=True)
             
-            # Función puente
             def on_terminar(error):
                 if error: print(f'Error: {error}')
                 bot.loop.create_task(reproducir_siguiente_async(ctx))
 
             vc.play(player, after=on_terminar)
             
-            await ctx.send(f"🎶 Escuchando ahora: **{siguiente['title']}**", view=PanelMusica(ctx))
+            msg = await ctx.send(f"🎶 Escuchando ahora: **{siguiente['title']}**", view=PanelMusica(ctx))
+            mensajes_controles[guild_id] = msg
         except Exception as e:
             await ctx.send(f"❌ Error al reproducir: {e}")
             bot.loop.create_task(reproducir_siguiente_async(ctx))
+    else:
+        if guild_id in mensajes_controles and mensajes_controles[guild_id]:
+            try:
+                await mensajes_controles[guild_id].delete()
+            except Exception:
+                pass
+            mensajes_controles[guild_id] = None
+        
+        await ctx.send("**La lista de reproducción ha terminado.**")
 
 @bot.command(name='stop')
 async def stop(ctx):
+    guild_id = ctx.guild.id
     if ctx.voice_client:
+        if guild_id in mensajes_controles and mensajes_controles[guild_id]:
+            try: await mensajes_controles[guild_id].delete()
+            except Exception: pass
+            mensajes_controles[guild_id] = None
+        
+        if guild_id in colas: colas[guild_id].clear()
+        if guild_id in cancion_actual: cancion_actual[guild_id] = None
+
         await ctx.voice_client.disconnect()
         await ctx.send("Igual ni quería estar aquí")
     else:

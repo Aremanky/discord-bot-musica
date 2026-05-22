@@ -2,6 +2,10 @@ import discord
 from discord.ext import commands
 import yt_dlp
 import asyncio
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -88,4 +92,4 @@ async def stop(ctx):
         await ctx.send("Ni siquiera estoy puesto en ningún canal. Pero a tu madre si que la van a echar pero del estudio de porno")
 
 
-bot.run('Coloca aquí tu token de Discord')
+bot.run(os.getenv('TOKEN'))

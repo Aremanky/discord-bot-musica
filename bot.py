@@ -45,8 +45,10 @@ ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 colas = {}
 historial = {}
 cancion_actual = {}
-tiempo_inicio = {}
 mensajes_controles = {}
+tiempo_transcurrido = {}   
+tiempo_ultimo_check = {}  
+tareas_actualizacion = {}
 
 class PanelMusica(discord.ui.View):
     def __init__(self, ctx):
@@ -59,7 +61,10 @@ class PanelMusica(discord.ui.View):
         if not vc: return await interaction.response.send_message("❌ No hay nada sonando.", ephemeral=True)
         
         guild_id = self.ctx.guild.id
-        tiempo_pasado = time.time() - tiempo_inicio.get(guild_id, time.time())
+
+        tiempo_pasado = tiempo_transcurrido.get(guild_id, 0)
+        if vc.is_playing():
+            tiempo_pasado += time.time() - tiempo_ultimo_check.get(guild_id, time.time())
 
         if tiempo_pasado > 10:
             if guild_id in cancion_actual and cancion_actual[guild_id]:
@@ -82,10 +87,14 @@ class PanelMusica(discord.ui.View):
         vc = self.ctx.voice_client
         if not vc: return await interaction.response.send_message("❌ No estoy conectado.", ephemeral=True)
         
+        guild_id = self.ctx.guild.id
         if vc.is_playing():
+            tiempo_transcurrido[guild_id] = tiempo_transcurrido.get(guild_id, 0) + (time.time() - tiempo_ultimo_check.get(guild_id, time.time()))
             vc.pause()
+            tiempo_ultimo_check[guild_id] = time.time()
             await interaction.response.send_message("⏸️ Música pausada.", ephemeral=True)
         elif vc.is_paused():
+            tiempo_ultimo_check[guild_id] = time.time()
             vc.resume()
             await interaction.response.send_message("▶️ Música reanudada.", ephemeral=True)
 
@@ -149,7 +158,14 @@ async def play(ctx, *, busqueda: str = None):
     data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(busqueda, download=False))
     cancion_info = data['entries'][0] if 'entries' in data else data
 
-    cancion = {'title': cancion_info['title'], 'url': cancion_info['webpage_url']}
+    cancion = {
+        'title': cancion_info['title'],
+        'url': cancion_info['webpage_url'],
+        'thumbnail': cancion_info.get('thumbnail'),
+        'duration': cancion_info.get('duration', 0),
+        'solicitante_nombre': ctx.author.display_name,
+        'solicitante_avatar': ctx.author.display_avatar.url
+    }
 
     guild_id = ctx.guild.id
     if guild_id not in colas:
@@ -165,9 +181,61 @@ async def play(ctx, *, busqueda: str = None):
         await mensaje_espera.delete()
         await reproducir_siguiente_async(ctx)
 
+async def actualizar_reproductor_loop(ctx, msg, guild_id, siguiente):
+    duration = siguiente['duration']
+    barra_total = 20  
+    
+    while True:
+        await asyncio.sleep(7) 
+        
+        vc = ctx.voice_client
+        if not vc or (not vc.is_playing() and not vc.is_paused()):
+            break 
+            
+        ahora = time.time()
+        
+        if vc.is_playing():
+            tiempo_transcurrido[guild_id] = tiempo_transcurrido.get(guild_id, 0) + (ahora - tiempo_ultimo_check.get(guild_id, ahora))
+        tiempo_ultimo_check[guild_id] = ahora
+        
+        elapsed = tiempo_transcurrido.get(guild_id, 0)
+        if duration > 0 and elapsed > duration:
+            elapsed = duration
+        
+        min_e, seg_e = divmod(int(elapsed), 60)
+        min_t, seg_t = divmod(duration, 60)
+        tiempo_actual_str = f"{min_e}:{seg_e:02d}"
+        tiempo_total_str = f"{min_t}:{seg_t:02d}" if duration else "🔴 En vivo"
+        
+        if duration > 0:
+            progreso = min(elapsed / duration, 1.0)
+            pos = int(progreso * barra_total)
+        else:
+            pos = 0
+        slider_str = "▬" * pos + "🔘" + "▬" * (barra_total - pos)
+        
+        embed = discord.Embed(
+            title=siguiente['title'],
+            url=siguiente['url'],
+            color=discord.Color.from_rgb(155, 89, 182)
+        )
+        if siguiente['thumbnail']:
+            embed.set_image(url=siguiente['thumbnail'])
+
+        embed.set_footer(
+            text=f"▶️ {slider_str} [{tiempo_actual_str} / {tiempo_total_str}]\nSolicitado por: {siguiente['solicitante_nombre']}",
+            icon_url=siguiente['solicitante_avatar']
+        )
+
+        await msg.edit(embed=embed)
+
 async def reproducir_siguiente_async(ctx):
     guild_id = ctx.guild.id
     vc = ctx.voice_client
+
+    if guild_id in tareas_actualizacion and tareas_actualizacion[guild_id]:
+        tareas_actualizacion[guild_id].cancel()
+        tareas_actualizacion[guild_id] = None
 
     if guild_id in cancion_actual and cancion_actual[guild_id]:
         historial[guild_id].append(cancion_actual[guild_id])
@@ -178,14 +246,13 @@ async def reproducir_siguiente_async(ctx):
     if guild_id in colas and len(colas[guild_id]) > 0:
         siguiente = colas[guild_id].pop(0)
         cancion_actual[guild_id] = siguiente
-        tiempo_inicio[guild_id] = time.time() 
+        
+        tiempo_transcurrido[guild_id] = 0
+        tiempo_ultimo_check[guild_id] = time.time()
 
-        # 🗑️ Borramos el panel de control previo si existe antes de mandar el nuevo
         if guild_id in mensajes_controles and mensajes_controles[guild_id]:
-            try:
-                await mensajes_controles[guild_id].delete()
-            except Exception:
-                pass
+            try: await mensajes_controles[guild_id].delete()
+            except Exception: pass
             mensajes_controles[guild_id] = None
 
         try:
@@ -197,17 +264,37 @@ async def reproducir_siguiente_async(ctx):
 
             vc.play(player, after=on_terminar)
             
-            msg = await ctx.send(f"🎶 Escuchando ahora: **{siguiente['title']}**", view=PanelMusica(ctx))
+            min_t, seg_t = divmod(siguiente['duration'], 60)
+            tiempo_total = f"{min_t}:{seg_t:02d}" if siguiente['duration'] else "🔴 En vivo"
+            slider_inicial = "🔘" + "▬" * 16
+
+            embed = discord.Embed(
+                title=siguiente['title'],
+                url=siguiente['url'],
+                color=discord.Color.from_rgb(155, 89, 182)
+            )
+            if siguiente['thumbnail']:
+                embed.set_image(url=siguiente['thumbnail'])
+                
+            embed.set_footer(
+                text=f"▶️ {slider_inicial} [0:00 / {tiempo_total}]\nSolicitado por: {siguiente['solicitante_nombre']}", 
+                icon_url=siguiente['solicitante_avatar']
+            )
+
+            msg = await ctx.send(embed=embed, view=PanelMusica(ctx))
             mensajes_controles[guild_id] = msg
+            
+            tareas_actualizacion[guild_id] = bot.loop.create_task(
+                actualizar_reproductor_loop(ctx, msg, guild_id, siguiente)
+            )
+            
         except Exception as e:
             await ctx.send(f"❌ Error al reproducir: {e}")
             bot.loop.create_task(reproducir_siguiente_async(ctx))
     else:
         if guild_id in mensajes_controles and mensajes_controles[guild_id]:
-            try:
-                await mensajes_controles[guild_id].delete()
-            except Exception:
-                pass
+            try: await mensajes_controles[guild_id].delete()
+            except Exception: pass
             mensajes_controles[guild_id] = None
         
         await ctx.send("**La lista de reproducción ha terminado.**")
@@ -215,6 +302,11 @@ async def reproducir_siguiente_async(ctx):
 @bot.command(name='stop')
 async def stop(ctx):
     guild_id = ctx.guild.id
+
+    if guild_id in tareas_actualizacion and tareas_actualizacion[guild_id]:
+        tareas_actualizacion[guild_id].cancel()
+        tareas_actualizacion[guild_id] = None
+    
     if ctx.voice_client:
         if guild_id in mensajes_controles and mensajes_controles[guild_id]:
             try: await mensajes_controles[guild_id].delete()

@@ -50,6 +50,69 @@ tiempo_transcurrido = {}
 tiempo_ultimo_check = {}  
 tareas_actualizacion = {}
 
+class PaginacionCola(discord.ui.View):
+    def __init__(self, canciones, autor_id):
+        super().__init__(timeout=90)  
+        self.canciones = canciones
+        self.autor_id = autor_id
+        self.por_pagina = 10
+        self.paginas_totales = max(1, (len(canciones) - 1) // self.por_pagina + 1)
+        self.pagina_actual = 0
+        self.message = None
+
+    def crear_embed(self):
+        embed = discord.Embed(
+            title="📋 Lista de Reproducción (Cola)",
+            color=discord.Color.from_rgb(155, 89, 182)
+        )
+        
+        inicio = self.pagina_actual * self.por_pagina
+        fin = inicio + self.por_pagina
+        canciones_pagina = self.canciones[inicio:fin]
+        
+        if not self.canciones:
+            embed.description = "La lista de reproducción está más vacía que tu cuenta bancaria. Pide algo con `.play` 🎵"
+        else:
+            descripcion = ""
+            for i, cancion in enumerate(canciones_pagina, start=inicio + 1):
+                min_t, seg_t = divmod(cancion['duration'], 60)
+                duracion_str = f"{min_t}:{seg_t:02d}" if cancion['duration'] else "🔴 En vivo"
+                descripcion += f"**{i}.** [{cancion['title']}]({cancion['url']}) `[{duracion_str}]` • *Por: {cancion['solicitante_nombre']}*\n\n"
+            embed.description = descripcion
+            
+        embed.set_footer(text=f"Página {self.pagina_actual + 1}/{self.paginas_totales} • Total: {len(self.canciones)} canciones")
+        return embed
+
+    def actualizar_botones(self):
+        self.children[0].disabled = self.pagina_actual == 0
+        self.children[1].disabled = self.pagina_actual == self.paginas_totales - 1
+
+    @discord.ui.button(label="⬅️ Anterior", style=discord.ButtonStyle.secondary)
+    async def btn_anterior(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.autor_id:
+            return await interaction.response.send_message("❌ No molestes a quien la está viendo. Pon `.cola` si quieres verla tú.", ephemeral=True)
+        
+        self.pagina_actual -= 1
+        self.actualizar_botones()
+        await interaction.response.edit_message(embed=self.crear_embed(), view=self)
+
+    @discord.ui.button(label="➡️ Siguiente", style=discord.ButtonStyle.secondary)
+    async def btn_siguiente(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.autor_id:
+            return await interaction.response.send_message("❌ No molestes a quien la está viendo. Pon `.cola` si quieres verla tú.", ephemeral=True)
+        
+        self.pagina_actual += 1
+        self.actualizar_botones()
+        await interaction.response.edit_message(embed=self.crear_embed(), view=self)
+        
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except Exception:
+            pass
+
 class PanelMusica(discord.ui.View):
     def __init__(self, ctx):
         super().__init__(timeout=None)
@@ -298,6 +361,36 @@ async def reproducir_siguiente_async(ctx):
             mensajes_controles[guild_id] = None
         
         await ctx.send("**La lista de reproducción ha terminado.**")
+
+@bot.command(name='cola')
+async def cola(ctx):
+    guild_id = ctx.guild.id
+    lista_canciones = colas.get(guild_id, [])
+
+    view = PaginacionCola(lista_canciones, ctx.author.id)
+    view.actualizar_botones()
+    embed = view.crear_embed()
+    
+    view.message = await ctx.send(embed=embed, view=view)
+
+
+@bot.command(name='fora')
+async def fora(ctx, numero: int = None):
+    if numero is None:
+        return await ctx.send("Pon un numero. Ejemplo: fora 3. No estoy estoy para adivinar nada de semejante trozo de carse sin cerebro.")
+        
+    guild_id = ctx.guild.id
+    lista_cola = colas.get(guild_id, [])
+    
+    if not lista_cola:
+        return await ctx.send("¿Pero qué quieres quitar si no está sonando nada? Como se nota que tus padres son primos🙄")
+
+    if numero < 1 or numero > len(lista_cola):
+        return await ctx.send(f"Tranquilo, entiendo que tienes down, te lo explico pa tontitos. En la lista solo hay {len(lista_cola)} canciones en espera, no me pidas la `{numero}`, pide una que esté en la lista.")
+
+    cancion_eliminada = lista_cola.pop(numero - 1)
+    
+    await ctx.send(f"🗑️ ¡A MAMARLA!: He borrado **{cancion_eliminada['title']}** a petición de {ctx.author.mention}, las culpas a el.")
 
 @bot.command(name='stop')
 async def stop(ctx):

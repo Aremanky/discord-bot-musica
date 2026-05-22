@@ -11,6 +11,7 @@ import yt_dlp
 import asyncio
 import os
 from dotenv import load_dotenv
+import time
 
 load_dotenv()
 
@@ -42,6 +43,68 @@ FFMPEG_OPTIONS = {
 ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
 
 colas = {}
+historial = {}
+cancion_actual = {}
+tiempo_inicio = {}
+
+class PanelMusica(discord.ui.View):
+    def __init__(self, ctx):
+        super().__init__(timeout=None)
+        self.ctx = ctx
+
+    @discord.ui.button(label="⏪ Atrás", style=discord.ButtonStyle.secondary)
+    async def btn_prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        vc = self.ctx.voice_client
+        if not vc: return await interaction.response.send_message("❌ No hay nada sonando.", ephemeral=True)
+        
+        guild_id = self.ctx.guild.id
+        tiempo_pasado = time.time() - tiempo_inicio.get(guild_id, time.time())
+
+        if tiempo_pasado > 10:
+            if guild_id in cancion_actual and cancion_actual[guild_id]:
+                colas[guild_id].insert(0, cancion_actual[guild_id])
+            await interaction.response.send_message("⏪ Han pasado más de 10s. Volviendo al inicio de la canción...", ephemeral=True)
+        else:
+            if guild_id in historial and len(historial[guild_id]) > 0:
+                anterior = historial[guild_id].pop()
+                if guild_id in cancion_actual and cancion_actual[guild_id]:
+                    colas[guild_id].insert(0, cancion_actual[guild_id])
+                colas[guild_id].insert(0, anterior) 
+                await interaction.response.send_message("⏮️ Menos de 10s. Volviendo a la canción anterior...", ephemeral=True)
+            else:
+                return await interaction.response.send_message("❌ No hay canciones anteriores en el historial.", ephemeral=True)
+        
+        vc.stop() 
+
+    @discord.ui.button(label="⏯️ Pause / Play", style=discord.ButtonStyle.primary)
+    async def btn_pause(self, interaction: discord.Interaction, button: discord.ui.Button):
+        vc = self.ctx.voice_client
+        if not vc: return await interaction.response.send_message("❌ No estoy conectado.", ephemeral=True)
+        
+        if vc.is_playing():
+            vc.pause()
+            await interaction.response.send_message("⏸️ Música pausada.", ephemeral=True)
+        elif vc.is_paused():
+            vc.resume()
+            await interaction.response.send_message("▶️ Música reanudada.", ephemeral=True)
+
+    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
+    async def btn_skip(self, interaction: discord.Interaction, button: discord.ui.Button):
+        vc = self.ctx.voice_client
+        if vc and (vc.is_playing() or vc.is_paused()):
+            await interaction.response.send_message("⏭️ Saltando a la siguiente...", ephemeral=True)
+            vc.stop() 
+        else:
+            await interaction.response.send_message("❌ No hay nada sonando.", ephemeral=True)
+
+    @discord.ui.button(label="🗑️ Limpiar", style=discord.ButtonStyle.danger)
+    async def btn_clear(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild_id = self.ctx.guild.id
+        if guild_id in colas:
+            colas[guild_id].clear()
+            await interaction.response.send_message("🗑️ Toda la cola ha sido eliminada.", ephemeral=True)
+        else:
+            await interaction.response.send_message("❌ La cola ya estaba vacía.", ephemeral=True)
 
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, volume=0.5):
@@ -81,34 +144,67 @@ async def play(ctx, *, busqueda: str = None):
         return await ctx.send(f'Estoy ocupado en otro canal, no me puedo dividir caraalcornoque. No soy tu puto exnovio como para que me exigas estar en dos sitios a la vez. 😡')
 
     mensaje_espera = await ctx.send(f"🔍 `Buscando **{busqueda}**`")
-    player = await YTDLSource.from_url(busqueda, loop=bot.loop, stream=True)
+    
+    # Buscamos la info de la canción, pero NO la procesamos todavía
+    data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(busqueda, download=False))
+    cancion_info = data['entries'][0] if 'entries' in data else data
+    
+    # Guardamos solo el enlace y el título
+    cancion = {'title': cancion_info['title'], 'url': cancion_info['webpage_url']}
 
-    if ctx.guild.id not in colas:
-        colas[ctx.guild.id] = []
+    guild_id = ctx.guild.id
+    if guild_id not in colas:
+        colas[guild_id] = []
+        historial[guild_id] = []
 
+    # Si ya hay algo sonando, va a la cola
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
-        colas[ctx.guild.id].append({'player': player, 'title': player.title})
+        colas[guild_id].append(cancion)
         await mensaje_espera.delete()
-        await ctx.send(f'🎶 Añadido a la cola: **{player.title}**')
+        await ctx.send(f'📝 Añadido a la cola: **{cancion["title"]}**')
     else:
-        def reproducir_siguiente(error):
-            if error:
-                print(f'Error de reproducción: {error}')
-            
-            if colas[ctx.guild.id]:
-                siguiente = colas[ctx.guild.id].pop(0)
-                ctx.voice_client.play(siguiente['player'], after=reproducir_siguiente)
-                bot.loop.create_task(ctx.send(f"🎶 Escuchando ahora: **{siguiente['title']}**"))
-
-        ctx.voice_client.play(player, after=reproducir_siguiente)
+        colas[guild_id].append(cancion)
         await mensaje_espera.delete()
-        await ctx.send(f'🎶 Escuchando ahora: **{player.title}**')
+        await reproducir_siguiente_async(ctx) # Arranca el motor de reproducción
+
+# Motor asíncrono inteligente
+async def reproducir_siguiente_async(ctx):
+    guild_id = ctx.guild.id
+    vc = ctx.voice_client
+
+    # Guardamos la canción que acaba de terminar en el historial (máximo 10)
+    if guild_id in cancion_actual and cancion_actual[guild_id]:
+        historial[guild_id].append(cancion_actual[guild_id])
+        if len(historial[guild_id]) > 10:
+            historial[guild_id].pop(0)
+        cancion_actual[guild_id] = None
+
+    # Si hay canciones en espera...
+    if guild_id in colas and len(colas[guild_id]) > 0:
+        siguiente = colas[guild_id].pop(0)
+        cancion_actual[guild_id] = siguiente
+        tiempo_inicio[guild_id] = time.time() # 👈 Arranca el cronómetro de los 10 segundos
+
+        try:
+            player = await YTDLSource.from_url(siguiente['url'], loop=bot.loop, stream=True)
+            
+            # Función puente
+            def on_terminar(error):
+                if error: print(f'Error: {error}')
+                bot.loop.create_task(reproducir_siguiente_async(ctx))
+
+            vc.play(player, after=on_terminar)
+            
+            await ctx.send(f"🎶 Escuchando ahora: **{siguiente['title']}**", view=PanelMusica(ctx))
+        except Exception as e:
+            await ctx.send(f"❌ Error al reproducir: {e}")
+            bot.loop.create_task(reproducir_siguiente_async(ctx))
 
 @bot.command(name='stop')
 async def stop(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("Igual ni queriría estar aquí")
+        await ctx.send("Igual ni quería estar aquí")
     else:
         await ctx.send("Pero a tu madre si que la van a echar pero del estudio de porno. Ni siquiera estoy puesto en ningún canal.")
 

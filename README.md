@@ -3,7 +3,7 @@
 [![Discord.js](https://img.shields.io/badge/discord.js-v14-blue.svg)](https://discord.js.org/)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
 [![Licencia](https://img.shields.io/badge/license-ISC-yellow.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)] (https://www.python.org/)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue) 
 
 Un bot de música para Discord, enfocado en ofrecer musical estable mediante **youtube**. Nace de la frustración con los bots masificados y los bloqueos de youtubr, permitiéndote hostear tu propio bot y olvidarte de las interrupciones.
 

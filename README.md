@@ -121,7 +121,7 @@ Bot de Python encendido como: ...
 
 ## 🎮 Comandos y Uso
 
-El bot usa el prefijo `.` (punto) por defecto pero en la linea 18 del `bot.py` verás `command_prefix = '.'`, cambialo a tu gusto. Todos los comandos deben escribirse en un canal de texto.
+El bot usa el prefijo `.` (punto) por defecto pero en la linea 20 del `bot.py` verás `command_prefix = '.'`, cambialo a tu gusto. Todos los comandos deben escribirse en un canal de texto.
 
 | Comando | Descripción | Ejemplo |
 | :--- | :--- | :--- |

@@ -221,6 +221,82 @@ async def play(ctx, *, busqueda: str = None):
     elif ctx.voice_client.channel != canal:
         return await ctx.send(f'Estoy ocupado en otro canal, no me puedo dividir caraalcornoque. No soy tu puto exnovio como para que me exigas estar en dos sitios a la vez. 😡')
 
+    guild_id = ctx.guild.id
+    if guild_id not in colas:
+        colas[guild_id] = []
+        historial[guild_id] = []
+
+    # 🔄 DETECTAR SI ES UNA LISTA DE REPRODUCCIÓN (PLAYLIST) DE YOUTUBE
+    if "list=" in busqueda or "playlist" in busqueda:
+        mensaje_espera = await ctx.send("⏳ `¡Playlist detectada! Limpiando la cola entera y cargando los temas en segundo plano... No me metas prisa, pedazo de ansioso.`")
+        
+        # 🗑️ Borramos toda la cola actual de inmediato
+        colas[guild_id].clear()
+        
+        # Función de extracción rápida (flat) para no congelar el bot
+        def buscar_playlist():
+            opts = {
+                'extract_flat': True,
+                'quiet': True,
+                'no_warnings': True,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(busqueda, download=False)
+        
+        try:
+            data = await bot.loop.run_in_executor(None, buscar_playlist)
+        except Exception as e:
+            await mensaje_espera.delete()
+            return await ctx.send(f"❌ Error al procesar la lista: `{e}`")
+            
+        if not data or 'entries' not in data:
+            await mensaje_espera.delete()
+            return await ctx.send("❌ No he encontrado una mierda en ese enlace de playlist. Asegúrate de que sea pública, fantasma.")
+            
+        entries = list(data['entries'])
+        if not entries:
+            await mensaje_espera.delete()
+            return await ctx.send("❌ Esa lista está más vacía que tu cerebro. Pon algo con cara y ojos.")
+            
+        # Metemos de golpe todas las canciones en la cola (en 2º plano, sin enviar mensajes)
+        for entry in entries:
+            if not entry: 
+                continue
+            
+            # Reconstruimos la URL si viene recortada por el modo flat
+            url_cancion = entry.get('url')
+            if not url_cancion or not url_cancion.startswith('http'):
+                video_id = entry.get('id')
+                if video_id:
+                    url_cancion = f"https://www.youtube.com/watch?v={video_id}"
+                else:
+                    continue
+            
+            thumbnail = entry.get('thumbnail')
+            if not thumbnail and entry.get('thumbnails'):
+                thumbnail = entry['thumbnails'][0]['url']
+                
+            cancion = {
+                'title': entry.get('title', 'Canción sin título'),
+                'url': url_cancion,
+                'thumbnail': thumbnail,
+                'duration': entry.get('duration', 0) if entry.get('duration') else 0,
+                'solicitante_nombre': ctx.author.display_name,
+                'solicitante_avatar': ctx.author.display_avatar.url if ctx.author.display_avatar else None
+            }
+            colas[guild_id].append(cancion)
+            
+        await mensaje_espera.delete()
+        await ctx.send(f"🎶 ¡Cola pulverizada! He añadido **{len(colas[guild_id])}** canciones de la playlist de golpe. 😎")
+        
+        # Si el bot ya estaba tocando algo, lo detenemos bruscamente para que empiece la playlist YA
+        if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+            ctx.voice_client.stop() # Esto disparará automáticamente 'reproducir_siguiente_async'
+        else:
+            await reproducir_siguiente_async(ctx)
+        return
+
+    # 🎵 CÓDIGO NORMAL PARA BÚSQUEDAS DE UNA SOLA CANCIÓN
     mensaje_espera = await ctx.send(f"🔍 `Buscando **{busqueda}**`")
 
     def buscar():
@@ -247,11 +323,6 @@ async def play(ctx, *, busqueda: str = None):
         'solicitante_nombre': ctx.author.display_name,
         'solicitante_avatar': ctx.author.display_avatar.url if ctx.author.display_avatar else None
     }
-
-    guild_id = ctx.guild.id
-    if guild_id not in colas:
-        colas[guild_id] = []
-        historial[guild_id] = []
 
     if ctx.voice_client.is_playing() or ctx.voice_client.is_paused() or estados_reproduccion.get(guild_id, False):
         colas[guild_id].append(cancion)
@@ -459,6 +530,7 @@ async def help_command(ctx):
         value=(
             "**`.play <búsqueda o URL>`**\n"
             "Busca una cancion en YouTube o reproduce un enlace directo. Si ya hay música sonando, lo mete en la cola de forma segura sin romper nada.\n\n"
+            "Si le pones un **enlace de una playlist de YouTube**, borro toda la lista de reproduccion de canciones, cortaré lo que esté sonando y cargaré todas las canciones de la lista.\n\n"
             "**`.stop`**\n"
             "Para la música por completo, me saca del canal, vacía la cola.\n\n"
         ),

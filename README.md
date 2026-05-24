@@ -2,7 +2,7 @@
 
 [![Discord.js](https://img.shields.io/badge/discord.js-v14-blue.svg)](https://discord.js.org/)
 [![Licencia](https://img.shields.io/badge/license-ISC-yellow.svg)](LICENSE)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue) 
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue) 
 
 Un bot de música para Discord, enfocado en ofrecer musical estable mediante **youtube**. Nace de la frustración con los bots masificados y los bloqueos de youtubr, permitiéndote hostear tu propio bot y olvidarte de las interrupciones.
 
@@ -25,7 +25,7 @@ Un bot de música para Discord, enfocado en ofrecer musical estable mediante **y
 
 ## 📋 Requisitos Previos
 
-- Python 3.10 o superior
+- Python 3.8 o superior
 - Un bot de Discord creado en el [Discord Developer Portal](https://discord.com/developers/applications)
 - FFmpeg instalado y accesible desde la terminal
 - Dependencias de Python:

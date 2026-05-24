@@ -49,6 +49,7 @@ mensajes_controles = {}
 tiempo_transcurrido = {}   
 tiempo_ultimo_check = {}  
 tareas_actualizacion = {}
+estados_reproduccion = {}
 
 class PaginacionCola(discord.ui.View):
     def __init__(self, canciones, autor_id):
@@ -189,12 +190,15 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=True):
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-        
-        if 'entries' in data:
-            data = data['entries'][0]
+        def extraer():
+            with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
+                info = ydl.extract_info(url, download=not stream)
+                if 'entries' in info:
+                    info = info['entries'][0]
+                filename = info['url'] if stream else ydl.prepare_filename(info)
+                return filename, info
 
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        filename, data = await loop.run_in_executor(None, extraer)
         return cls(discord.FFmpegPCMAudio(filename, **FFMPEG_OPTIONS), data=data)
 
 @bot.event
@@ -218,8 +222,21 @@ async def play(ctx, *, busqueda: str = None):
 
     mensaje_espera = await ctx.send(f"🔍 `Buscando **{busqueda}**`")
 
-    data = await bot.loop.run_in_executor(None, lambda: ytdl.extract_info(busqueda, download=False))
-    cancion_info = data['entries'][0] if 'entries' in data else data
+    def buscar():
+        with yt_dlp.YoutubeDL(YTDL_OPTIONS) as ydl:
+            return ydl.extract_info(busqueda, download=False)
+    
+    try:
+        data = await bot.loop.run_in_executor(None, buscar)
+    except Exception as e:
+        await mensaje_espera.delete()
+        return await ctx.send(f"❌ Hubo un problema al conectar con YouTube: `{e}`")
+
+    if not data:
+        await mensaje_espera.delete()
+        return await ctx.send("❌ YouTube ha devuelto una respuesta vacía. Prueba a escribirlo de otra forma.")
+
+    cancion_info = data['entries'][0] if 'entries' in data and data['entries'] else data
 
     cancion = {
         'title': cancion_info['title'],
@@ -227,7 +244,7 @@ async def play(ctx, *, busqueda: str = None):
         'thumbnail': cancion_info.get('thumbnail'),
         'duration': cancion_info.get('duration', 0),
         'solicitante_nombre': ctx.author.display_name,
-        'solicitante_avatar': ctx.author.display_avatar.url
+        'solicitante_avatar': ctx.author.display_avatar.url if ctx.author.display_avatar else None
     }
 
     guild_id = ctx.guild.id
@@ -235,7 +252,7 @@ async def play(ctx, *, busqueda: str = None):
         colas[guild_id] = []
         historial[guild_id] = []
 
-    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
+    if ctx.voice_client.is_playing() or ctx.voice_client.is_paused() or estados_reproduccion.get(guild_id, False):
         colas[guild_id].append(cancion)
         await mensaje_espera.delete()
         await ctx.send(f'📝 Añadido a la cola: **{cancion["title"]}**')
@@ -296,6 +313,14 @@ async def reproducir_siguiente_async(ctx):
     guild_id = ctx.guild.id
     vc = ctx.voice_client
 
+    if not vc:
+        estados_reproduccion[guild_id] = False
+        return
+
+    if vc.is_playing() or vc.is_paused():
+        estados_reproduccion[guild_id] = False
+        return
+    
     if guild_id in tareas_actualizacion and tareas_actualizacion[guild_id]:
         tareas_actualizacion[guild_id].cancel()
         tareas_actualizacion[guild_id] = None
@@ -307,6 +332,8 @@ async def reproducir_siguiente_async(ctx):
         cancion_actual[guild_id] = None
 
     if guild_id in colas and len(colas[guild_id]) > 0:
+        estados_reproduccion[guild_id] = True
+        
         siguiente = colas[guild_id].pop(0)
         cancion_actual[guild_id] = siguiente
         
@@ -323,6 +350,7 @@ async def reproducir_siguiente_async(ctx):
             
             def on_terminar(error):
                 if error: print(f'Error: {error}')
+                estados_reproduccion[guild_id] = False
                 bot.loop.create_task(reproducir_siguiente_async(ctx))
 
             vc.play(player, after=on_terminar)
@@ -353,8 +381,10 @@ async def reproducir_siguiente_async(ctx):
             
         except Exception as e:
             await ctx.send(f"❌ Error al reproducir: {e}")
+            estados_reproduccion[guild_id] = False
             bot.loop.create_task(reproducir_siguiente_async(ctx))
     else:
+        estados_reproduccion[guild_id] = False
         if guild_id in mensajes_controles and mensajes_controles[guild_id]:
             try: await mensajes_controles[guild_id].delete()
             except Exception: pass
@@ -395,6 +425,7 @@ async def fora(ctx, numero: int = None):
 @bot.command(name='stop')
 async def stop(ctx):
     guild_id = ctx.guild.id
+    estados_reproduccion[guild_id] = False
 
     if guild_id in tareas_actualizacion and tareas_actualizacion[guild_id]:
         tareas_actualizacion[guild_id].cancel()

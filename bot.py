@@ -20,6 +20,7 @@ intents.message_content = True
 command_prefix = '.'
 bot = commands.Bot(command_prefix, intents=intents)
 
+bot.remove_command('help')
 
 # No me vas a joder mar youtube, me hago pasar por móvil y me dejas en paz, payaso.
 YTDL_OPTIONS = {
@@ -444,5 +445,54 @@ async def stop(ctx):
         await ctx.send("Igual ni quería estar aquí")
     else:
         await ctx.send("Pero a tu madre si que la van a echar pero del estudio de porno. Ni siquiera estoy puesto en ningún canal.")
+
+@bot.command(name='help')
+async def help_command(ctx):
+    embed = discord.Embed(
+        title="📖 Guía de uso para Inútiles",
+        description="Aquí tienes la lista de comandos para que aprendas a usarme y aprendelos que no me gusta repetirme.\n\n",
+        color=discord.Color.from_rgb(155, 89, 182)
+    )
+    
+    embed.add_field(
+        name="🔊 COMANDOS DE MÚSICA",
+        value=(
+            "**`.play <búsqueda o URL>`**\n"
+            "Busca una cancion en YouTube o reproduce un enlace directo. Si ya hay música sonando, lo mete en la cola de forma segura sin romper nada.\n\n"
+            "**`.stop`**\n"
+            "Para la música por completo, me saca del canal, vacía la cola.\n\n"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="📋 GESTIÓN DE COLA",
+        value=(
+            "**`.cola`**\n"
+            "Te muestra la lista de canciones que están esperando su turno para sonar.\n\n"
+            "**`.fora <número>`**\n"
+            "Elimina una canción específica de la cola usando su número de posición.\n\n"
+        ),
+        inline=False
+    )
+    
+    embed.add_field(
+        name="🎛️ PANEL INTERACTIVO",
+        value=(
+            "Cada vez que pones una canción, te sale un panel visual: \n\n"
+            "**⏯️ Pausa / Reanudar:** Pausa la música o reanuda la musica.\n"
+            "**⏭️ Saltar (Skip):** Skipea la canción actual.\n"
+            "**⏪ Volver:** Si han pasado mas de 10 segundos de la reproducción de una canción vuelve a reproducirla pero si ha pasado menos vuelve a la cacnion que sonaba antes (Un limite de 20 canciones previas).\n"
+            "**🗑️ Limpia:** Limpia la cola de reproducción."
+        ),
+        inline=False
+    )
+
+    embed.set_footer(
+        text=f"Escribe {command_prefix} antes de cada comando.",
+        icon_url=bot.user.avatar.url if bot.user.avatar else None
+    )
+    
+    await ctx.send(embed=embed)
 
 bot.run(os.getenv('TOKEN'))

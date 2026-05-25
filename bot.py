@@ -226,14 +226,10 @@ async def play(ctx, *, busqueda: str = None):
         colas[guild_id] = []
         historial[guild_id] = []
 
-    # 🔄 DETECTAR SI ES UNA LISTA DE REPRODUCCIÓN (PLAYLIST) DE YOUTUBE
     if "list=" in busqueda or "playlist" in busqueda:
         mensaje_espera = await ctx.send("⏳ `¡Playlist detectada! Limpiando la cola entera y cargando los temas en segundo plano... No me metas prisa, pedazo de ansioso.`")
-        
-        # 🗑️ Borramos toda la cola actual de inmediato
         colas[guild_id].clear()
         
-        # Función de extracción rápida (flat) para no congelar el bot
         def buscar_playlist():
             opts = {
                 'extract_flat': True,
@@ -251,12 +247,12 @@ async def play(ctx, *, busqueda: str = None):
             
         if not data or 'entries' not in data:
             await mensaje_espera.delete()
-            return await ctx.send("❌ No he encontrado una mierda en ese enlace de playlist. Asegúrate de que sea pública, fantasma.")
+            return await ctx.send("❌ No he encontrado una mierda en ese enlace de playlist.")
             
         entries = list(data['entries'])
         if not entries:
             await mensaje_espera.delete()
-            return await ctx.send("❌ Esa lista está más vacía que tu cerebro. Pon algo con cara y ojos.")
+            return await ctx.send("❌ Esa lista está más vacía que tu cerebro.")
             
         # Metemos de golpe todas las canciones en la cola (en 2º plano, sin enviar mensajes)
         for entry in entries:
@@ -280,7 +276,7 @@ async def play(ctx, *, busqueda: str = None):
                 'title': entry.get('title', 'Canción sin título'),
                 'url': url_cancion,
                 'thumbnail': thumbnail,
-                'duration': entry.get('duration', 0) if entry.get('duration') else 0,
+                'duration': int(entry.get('duration', 0) or 0),
                 'solicitante_nombre': ctx.author.display_name,
                 'solicitante_avatar': ctx.author.display_avatar.url if ctx.author.display_avatar else None
             }
@@ -295,8 +291,7 @@ async def play(ctx, *, busqueda: str = None):
         else:
             await reproducir_siguiente_async(ctx)
         return
-
-    # 🎵 CÓDIGO NORMAL PARA BÚSQUEDAS DE UNA SOLA CANCIÓN
+        
     mensaje_espera = await ctx.send(f"🔍 `Buscando **{busqueda}**`")
 
     def buscar():
@@ -319,7 +314,7 @@ async def play(ctx, *, busqueda: str = None):
         'title': cancion_info['title'],
         'url': cancion_info['webpage_url'],
         'thumbnail': cancion_info.get('thumbnail'),
-        'duration': cancion_info.get('duration', 0),
+        'duration': int(entry.get('duration', 0) or 0),
         'solicitante_nombre': ctx.author.display_name,
         'solicitante_avatar': ctx.author.display_avatar.url if ctx.author.display_avatar else None
     }

@@ -314,7 +314,7 @@ async def play(ctx, *, busqueda: str = None):
         'title': cancion_info['title'],
         'url': cancion_info['webpage_url'],
         'thumbnail': cancion_info.get('thumbnail'),
-        'duration': int(entry.get('duration', 0) or 0),
+        'duration': int(cancion_info.get('duration', 0) or 0),
         'solicitante_nombre': ctx.author.display_name,
         'solicitante_avatar': ctx.author.display_avatar.url if ctx.author.display_avatar else None
     }
